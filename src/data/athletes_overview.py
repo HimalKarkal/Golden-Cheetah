@@ -8,14 +8,13 @@ This script collects information about each athlete in the Golden Cheetah datase
 - duration: The number of days between the first and last bike ride recorded for the athlete
 - rideFrequency: The average number of bike rides per day for the athlete
 
-This csv is saved in the data\interim directory as athlete_survey.csv and is used to select athletes for further analysis in the project.
+This csv is saved in the data\processed directory as athlete_survey.csv and is used to select athletes for further analysis in the project.
 """
 
 # Importing packages
 from opendata import OpenData
 import pandas as pd
 from datetime import datetime
-import os
 
 od = OpenData()
 
@@ -113,12 +112,5 @@ for athlete in athletes:
         print(f"Skipping athlete {athlete} due to error: {e}")
         continue  # Continue with the next athlete
 
-# Define the path to save the CSV file
-output_dir = os.path.join("data", "interim")
-output_file = os.path.join(output_dir, "athlete_survey.csv")
-
-# Ensure the directory exists
-os.makedirs(output_dir, exist_ok=True)
-
 # Save the dataframe to a CSV file
-df_AthleteSurvey.to_csv(output_file, index=False)
+df_AthleteSurvey.to_csv(r"..\..\data\processed\athletes_overview.csv", index=False)
