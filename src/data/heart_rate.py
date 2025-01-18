@@ -31,8 +31,14 @@ def hr_max(athlete_id: str):
     # Accessing the athlete's data
     athlete = od.get_remote_athlete(athlete_id)
 
-    # Getting the athlete's activities
-    activities = list(athlete.activities())
+    # Error handling for corrupted data
+    try:
+        # Getting the athlete's activities
+        activities = list(athlete.activities())
+
+    except KeyError:
+        print(f"Data for athlete {athlete_id} is corrupted")
+        overall_max_hr = None
 
     # Initialising a variable to store the maximum heart rate
     overall_max_hr = 0
@@ -44,8 +50,8 @@ def hr_max(athlete_id: str):
             # Getting the heart rate data for the activity
             hr_series = activity.data["hr"]
 
-            # Check whether hr_series contains nans
-            if hr_series.isna().all():
+            # Continue if the heart rate data is too short or contains only missing values
+            if len(hr_series) < 10 or hr_series.isna().all():
                 continue
 
             if hr_series.isna().any():
