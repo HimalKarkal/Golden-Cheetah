@@ -39,6 +39,7 @@ def hr_max(athlete_id: str):
     except KeyError:
         print(f"Data for athlete {athlete_id} is corrupted")
         overall_max_hr = None
+        return overall_max_hr
 
     # Initialising a variable to store the maximum heart rate
     overall_max_hr = 0
