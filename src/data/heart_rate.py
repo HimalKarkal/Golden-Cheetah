@@ -1,9 +1,6 @@
 """
 This file contains helper functions to process heart rate data from the Golden Cheetah dataset.
 The main function, hr_max(), calculates the maximum heart rate for a given athlete.
-
-arguments: athlete_id (str) - the unique identifier for the athlete
-returns: hr_max (int) - the maximum heart rate for the athlete
 """
 
 import numpy as np
