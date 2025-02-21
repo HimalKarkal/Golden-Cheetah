@@ -1,5 +1,5 @@
 """
-This script collects information about each athlete in the Golden Cheetah dataset and creates a csv file with the following columns:
+This script collects information about each athlete in the Golden Cheetah dataset and creates a CSV file with the following columns:
 
 - id: The athlete's unique identifier
 - gender: The athlete's gender
@@ -8,12 +8,12 @@ This script collects information about each athlete in the Golden Cheetah datase
 - duration: The number of days between the first and last bike ride recorded for the athlete
 - rideFrequency: The average number of bike rides per day for the athlete
 
-This csv is saved in the data\processed directory as athlete_survey.csv and is used to select athletes for further analysis in the project.
+This CSV is saved in the data\processed directory as athlete_survey.csv and is used to select athletes for further analysis in the project.
 """
 
 # Importing packages
 from opendata import OpenData
-import pandas as pd
+import polars as pl
 from datetime import datetime
 
 od = OpenData()
@@ -21,96 +21,58 @@ od = OpenData()
 # Getting a directory of all athletes in the dataset
 athletes = od.remote_athletes()
 
-# Looping through each athlete and collecting information of interest
-
-# Creating an empty pandas dataframe to store every athlete's information
-df_AthleteSurvey = pd.DataFrame()
+# List to hold data for each athlete
+athlete_records = []
 
 for athlete in athletes:
-    try:  # Added a try-except block to handle errors for each athlete
+    try:
         metadata = athlete.metadata
-
         if metadata is not None:
-            df_athlete = pd.DataFrame()  # Creates a temporary empty dataframe to store an individual athlete's information
-
-            # Collect athlete ID
-            id = metadata["ATHLETE"]["id"][
-                1:-1
-            ]  # Collects id and slices curly braces out
-            df_athlete["id"] = [id]  # Adds id to dataframe
-
-            # Collect gender
-            gender = metadata["ATHLETE"]["gender"]  # Collects gender
-            df_athlete["gender"] = [gender]  # Adds gender to dataframe
-
-            # Collect year of birth
-            yearOfBirth = metadata["ATHLETE"]["yob"]  # Collects yearOfBirth
-            df_athlete["yob"] = [yearOfBirth]  # Adds year_of_birth to dataframe
+            record = {}
+            # Collect athlete ID, gender, and year of birth
+            record["id"] = metadata["ATHLETE"]["id"][1:-1]  # Remove curly braces
+            record["gender"] = metadata["ATHLETE"]["gender"]
+            record["yob"] = metadata["ATHLETE"]["yob"]
 
             # Isolate bike rides from all activities
-            dict_BikeRides = {}  # Creates an empty dataframe to store only bike rides
+            dict_BikeRides = {}
+            for key in metadata["RIDES"].keys():
+                if metadata["RIDES"][key]["sport"] == "Bike":
+                    dict_BikeRides[key] = metadata["RIDES"][key]
 
-            for key in metadata[
-                "RIDES"
-            ].keys():  # Loops through each activity in the RIDES dictionary
-                if (
-                    metadata["RIDES"][key]["sport"] == "Bike"
-                ):  # Checks if the activity is a bike ride
-                    dict_BikeRides[key] = metadata["RIDES"][
-                        key
-                    ]  # If True, adds the key-value pair to dict_BikeRides
+            # Total number of rides
+            record["numberOfRides"] = len(dict_BikeRides)
 
-            # Collect total number of rides
-            numberOfRides = len(dict_BikeRides)
-            df_athlete["numberOfRides"] = [
-                numberOfRides
-            ]  # Adds numberOfRides to dataframe
-
-            # Collect duration of data collection
-            keys_list = list(dict_BikeRides.keys())  # Converts dict_keys to a list
-            if (
-                len(keys_list) != 0
-            ):  # Checks whether keys_list is empty, if not continues
-                startDate = keys_list[0].split(" ")[
-                    0
-                ]  # Sets the first key's date as startDate
-                endDate = keys_list[-1].split(" ")[
-                    0
-                ]  # Sets the last key's date as endDate
-                try:  # Checks for Value Error. Observed one date recorded in a different language which threw an error
-                    startDate = datetime.strptime(
-                        startDate, "%Y/%m/%d"
-                    )  # Converts startDate to datetime
-                    endDate = datetime.strptime(
-                        endDate, "%Y/%m/%d"
-                    )  # Converts endDate to datetime
-                    duration = (
-                        endDate - startDate
-                    ).days  # Calculates duration by subtracting the two datetime objects
+            # Calculate duration between first and last bike ride
+            keys_list = list(dict_BikeRides.keys())
+            if len(keys_list) != 0:
+                startDate_str = keys_list[0].split(" ")[0]
+                endDate_str = keys_list[-1].split(" ")[0]
+                try:
+                    startDate = datetime.strptime(startDate_str, "%Y/%m/%d")
+                    endDate = datetime.strptime(endDate_str, "%Y/%m/%d")
+                    record["duration"] = (endDate - startDate).days
                 except ValueError:
-                    pass
-            else:  # If keys_list is empty sets duration to 0
-                duration = 0
+                    record["duration"] = 0
+            else:
+                record["duration"] = 0
 
-            df_athlete["duration"] = [duration]  # Adds duration to dataframe
-
-            # Collect ride frequency
-            rideFrequency = numberOfRides / duration if duration != 0 else 0
-            df_athlete["rideFrequency"] = [
-                rideFrequency
-            ]  # Adds rideFrequency to dataframe
-
-            # Add row to df_AthleteSurvey
-            df_AthleteSurvey = pd.concat(
-                [df_AthleteSurvey, df_athlete], ignore_index=True
+            # Calculate ride frequency (rides per day)
+            record["rideFrequency"] = (
+                (record["numberOfRides"] / record["duration"])
+                if record["duration"] != 0
+                else 0
             )
 
-            # Print progress
-            print(f"{len(df_AthleteSurvey)} Processed athlete {athlete}")
+            athlete_records.append(record)
+            print(f"{len(athlete_records)} Processed athlete {athlete}")
 
-    except Exception as e:  # Catches any exception during processing of an athlete
+    except Exception as e:
         print(f"Skipping athlete {athlete} due to error: {e}")
-        continue  # Continue with the next athlete
+        continue
 
-# Save the dataframe to a CSV file
-df_AthleteSurvey.to_csv(r"..\..\data\processed\athletes_overview.csv", index=False)
+# Create the final Polars DataFrame in one go
+df_AthleteSurvey = pl.DataFrame(athlete_records)
+
+# Save the DataFrame to a CSV file
+df_AthleteSurvey.write_csv(r"..\..\data\processed\athletes_overview.csv")
