@@ -1,11 +1,13 @@
 import opendata.models as models
 import polars as pl
 import datetime as dt
+from sktime.transformations.series.outlier_detection import HampelFilter
+from sktime.transformations.series.impute import Imputer
 
 
 class ActivityFunctions:
     @staticmethod
-    def max_hr(activity_instance: models.Activity):
+    def max_hr(activity: models.Activity):
         """Identifies maximum heart rate from the activity data.
         Args:
               activity_instance: An instance of opendata.models.Activity.
@@ -13,11 +15,37 @@ class ActivityFunctions:
         Returns:
               The maximum heart rate from the activity data as an integer.
         """
-        if activity_instance.data is None:
+        # Checking if the activity is a bike ride
+        if activity.metadata["sport"] != "Bike":
+            print(
+                "This activity is not a bike ride. HR max calculation skipped. Returning None."
+            )
             return None
+
         else:
-            df = activity_instance.data
-        return df["hr"].max()
+            # Getting the heart rate data for the activity
+            hr_series = activity.data["hr"].dropna()
+
+            # Continue if the heart rate data is too short or contains only missing values
+            if len(hr_series) < 10 or hr_series.isna().all():
+                print(
+                    "Heart rate data is too short or contains only missing values. Returning None."
+                )
+                return None
+
+            # if hr_series.isna().any():
+            #   hr_series = Imputer(method="linear").fit_transform(hr_series)
+
+            # Applying the Hampel filter to the heart rate data
+            hr_series = HampelFilter().fit_transform(hr_series)
+
+            # Imputing missing values using the sktime imputer
+            hr_series = Imputer(method="linear").fit_transform(hr_series)
+
+            # Calculating the maximum heart rate for the activity
+            activity_max_hr = hr_series.max()
+
+            return activity_max_hr
 
     @staticmethod
     def process_hrr(activity_instance: models.Activity, max_hr: int):
