@@ -48,7 +48,7 @@ This class contains static methods to perform several key operations on activity
 
 2.  **`process_trimp`**: *In progress*
 
-3.  **`process_cp`**: *In progress*
+3.  **`process_criticalPower`**: *In progress*
 
 #### `Athlete` Class
 
