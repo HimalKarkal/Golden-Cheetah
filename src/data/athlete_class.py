@@ -26,6 +26,8 @@ class ActivityFunctions:
         # Loading data into polars dataframe
         if activity_instance.data is None:
             return None
+        elif activity_instance.metadata is None:
+            return None
         elif activity_instance.data["hr"].isna().all():
             return None
         else:
@@ -155,6 +157,9 @@ class ActivityFunctions:
         Returns:
             pl.DataFrame: A polars dataframe containing the maximum mean power for each activity.
         """
+        # Returning None if metadata does not exist
+        if activity_instance.metadata is None:
+            return None
 
         # Storing the date of the activity
         date = dt.datetime.strptime(
@@ -224,8 +229,61 @@ class ActivityFunctions:
 
         return df_activity
 
-    def process_trimp(self):
-        pass
+    @staticmethod
+    def process_trimp(
+        activity_instance: models.Activity, gender: str, hr_max: int, hr_min: int
+    ):
+        """Processes activity and returns the TRIMP score for the activity"""
+
+        # Check that the data is good
+        if activity_instance.data["hr"] is None:
+            return None
+        elif activity_instance.metadata is None:
+            return None
+        elif activity_instance.data["hr"].isna().all():
+            return None
+        elif (activity_instance.data["hr"] == 0).all():
+            return None
+        else:
+            df = pl.from_pandas(activity_instance.data)
+
+        # Storing the date of the activity
+        date = dt.datetime.strptime(
+            activity_instance.metadata["date"],
+            r"%Y/%m/%d %H:%M:%S UTC",
+        )
+
+        # Filtering out rows where HR is 0 bpm
+        df = df.filter(pl.col("hr") >= 25)
+
+        # Calculating average HR over activity
+        hr_mean = df["hr"].mean()
+
+        # Returning None if hr_mean is None
+        if hr_mean is None:
+            return None
+
+        # Duration of activity (mins)
+        duration = df.height / 60
+
+        # Matching athlete to correct weighting factor based on gender
+        match gender:
+            case "M":
+                Y = 1.92
+            case "F":
+                Y = 1.67
+
+        # Calculating delta HR ratio
+        delta_HR_ratio = (hr_mean - hr_min) / (hr_max - hr_min)
+
+        # Banister's TRIMP calculation
+        trimp = duration * delta_HR_ratio * Y
+
+        output_df = pl.DataFrame(
+            {"activity_id": activity_instance.id, "date": date, "trimp": trimp}
+        )
+
+        return output_df
 
 
 # ATHLETE FUNCTIONS
@@ -237,9 +295,10 @@ od = OpenData()
 class Athlete:
     def __init__(self, athlete_id):
         self.id = athlete_id
+        self.gender = None
         self.max_hr = None
         self.min_hr = None
-        self.data_start_date = None
+        self.date_of_first_ride = None
 
         # Try getting athlete data locally
         try:
@@ -267,11 +326,17 @@ class Athlete:
                 if ex.response["Error"]["Code"] == "NoSuchKey":
                     print("Athlete not found! Provide a valid athlete ID.")
 
+    def get_gender(self):
+        self.gender = self.metadata["ATHLETE"]["gender"]
+
+    def get_date_of_first_ride(self):
         # Identifying the start date of each athlete's data
         # Creating an empty list to store dates
         dates = []
         # Iterating through each activity
         for activity in self.activities:
+            if activity.metadata is None:
+                continue
             if activity.metadata["sport"] == "Bike":
                 dates.append(
                     dt.datetime.strptime(
@@ -282,10 +347,10 @@ class Athlete:
         # If no bike rides found, print a message and return None
         if dates == []:
             print(f"No bike rides found for athlete {self.id}.")
-            self.data_start_date = None
+            self.date_of_first_ride = None
         else:
             # Getting the earliest date from the list of dates
-            self.data_start_date = min(dates)
+            self.date_of_first_ride = min(dates)
 
     def get_hr_min_max(self):
         """Identifies the minimum and maximum heart rate (HR) for the athlete after filtering outliers from HR series data."""
@@ -293,41 +358,62 @@ class Athlete:
         max_hr_array = np.array([])
         min_hr_array = np.array([])
 
+        # Getting athlete gender
+        if self.gender is None:
+            self.get_gender()
+
+        # Matching gender to hr cutoff
+        match self.gender:
+            case "M":
+                cutoff = 215
+            case "F":
+                cutoff = 210
+
         # Iterating through each activity
         for activity in self.activities:
             # Checking whether the activity is a bike ride
-            if activity.metadata["sport"] == "Bike":
-                # Checking whether the activity has hr data
-                # Filtering outliers from the HR series using the Hampel filter
+            # Continue if activity has no metadata
+            if activity.metadata is None:
+                continue
+            elif activity.data is None:
+                continue
+            else:
                 hr_series = activity.data["hr"]
 
-                # Continue if the heart rate data is too short for the hampel filter or contains only missing values
-                if len(hr_series) < 21 or hr_series.isna().all():
+                # Removing values deemed impalusible from the hr series
+                # Values less than 40 are highly unlikely considering the individuals are about to start exercising.
+                # Similarly, values greater than 215 for males and 210 for females are unlikely. Supported by literature.
+                hr_series = hr_series[
+                    (hr_series >= 40) & (hr_series <= cutoff) & (~hr_series.isna())
+                ]
+
+                # Moving to the next iteration if hr_series is empty
+                if len(hr_series) == 0:
                     continue
 
-                # Applying the Hampel filter to the heart rate data
-                hr_series = hampel_filter(
-                    hr_series.to_list(), half_window=10, n_sigma=3.0
-                )
                 # Appending the maximum heart rate from the filtered HR series to max_hr_array
                 max_hr_array = np.append(max_hr_array, max(hr_series))
 
                 # Appending the minimum heart rate from the filtered HR series to min_hr_array
                 min_hr_array = np.append(min_hr_array, min(hr_series))
 
-        # Getting overall max HR from max_hr_array
-        overall_max_hr = np.median(max_hr_array)
+        # Calculating HR min and max as the 5th and 95th percentiles of their respective arrays if the array contains at least 20 elements
+        no_of_readings = len(max_hr_array)
+        print(no_of_readings == len(min_hr_array))
+        if no_of_readings < 20:
+            print(
+                f"Athlete {self.id} does not have enough readings to identify max and min hr"
+            )
+        else:
+            # Getting overall min and max HR from the sorted arrays as the 5th and 95th percentile respectively
+            overall_min_hr = np.percentile(min_hr_array, 5)
+            overall_max_hr = np.percentile(max_hr_array, 95)
 
-        # Removing zeroes from the min_hr_array
-        min_hr_array = min_hr_array[min_hr_array != 0]
-
-        # Getting overall min HR from min_hr_array
-        overall_min_hr = np.median(min_hr_array)
-
-        self.max_hr = overall_max_hr
-        self.min_hr = overall_min_hr
-        print(f"Minimum heart rate for athlete {self.id} is {self.min_hr} bpm.")
-        print(f"Maximum heart rate for athlete {self.id} is {self.max_hr} bpm.")
+            # Updating athlete data
+            self.max_hr = overall_max_hr
+            self.min_hr = overall_min_hr
+            print(f"Minimum heart rate for athlete {self.id} is {self.min_hr} bpm.")
+            print(f"Maximum heart rate for athlete {self.id} is {self.max_hr} bpm.")
 
     def process_hrr(self):
         """Processes HRR(30) data for the athlete across all bike rides and returns a polars dataframe with the results."""
@@ -338,10 +424,15 @@ class Athlete:
         if self.max_hr is None:
             print("Athlete's max HR is unknown. Calculating it now.")
             self.get_hr_min_max()
+        if self.date_of_first_ride is None:
+            self.get_date_of_first_ride()
 
         # Iterating through each activity
         for activity in self.activities:
             # Checking whether the activity is a bike ride
+            # Continue if activity has no metadata
+            if activity.metadata is None:
+                continue
             if activity.metadata["sport"] != "Bike":
                 continue
             # Applying the ActivityFunctions.process_hrr method to each activity
@@ -377,7 +468,7 @@ class Athlete:
         processed_df = processed_df.with_columns(
             pl.lit(self.id).alias("athlete_id"),
             (
-                (pl.col("date") - self.data_start_date).dt.total_days() // 7
+                (pl.col("date") - self.date_of_first_ride).dt.total_days() // 7
             )  # Adding week number column
             .cast(pl.Int64)
             .alias("week_no"),
@@ -409,10 +500,15 @@ class Athlete:
         if self.max_hr is None:
             print("Athlete's max HR is unknown. Calculating it now.")
             self.get_hr_min_max()
+        if self.date_of_first_ride is None:
+            self.get_date_of_first_ride()
 
         # Iterating through each activity
         for activity in self.activities:
             # Skipping current iteration if activity is not a bike ride or the activity has no heart rate data
+            # Continue if activity has no metadata
+            if activity.metadata is None:
+                continue
             if (
                 activity.metadata["sport"] != "Bike"
                 or activity.data["hr"].isna().all()
@@ -438,7 +534,7 @@ class Athlete:
                 .with_columns(
                     pl.lit(self.id).alias("athlete_id"),
                     pl.lit(self.metadata["ATHLETE"]["gender"]).alias("gender"),
-                    ((pl.col("date") - self.data_start_date).dt.total_days() // 7)
+                    ((pl.col("date") - self.date_of_first_ride).dt.total_days() // 7)
                     .cast(pl.Int64)
                     .alias("week_no"),
                 )
@@ -472,4 +568,42 @@ class Athlete:
             )
 
     def process_trimp(self):
-        pass
+        # Checking whether the athlete's gender, max_hr, min_hr, week number, and date of first ride are loaded
+        if self.max_hr is None:
+            self.get_hr_min_max()
+        if self.date_of_first_ride is None:
+            self.get_date_of_first_ride()
+        if self.gender is None:
+            self.get_gender()
+
+        # Looping through activities to identify
+
+        processed_dfs_list = [
+            ActivityFunctions.process_trimp(
+                activity, self.gender, self.max_hr, self.min_hr
+            )
+            for activity in self.activities
+        ]
+        processed_dfs_list = [
+            df for df in processed_dfs_list if df is not None
+        ]  # Removing None from the list
+
+        # Creating output dataframe
+        output_df = pl.concat(processed_dfs_list)
+
+        # Adding athlete_id, gender, and week_no to output_df
+        output_df = output_df.with_columns(
+            pl.lit(self.id).cast(pl.String).alias("athlete_id"),
+            pl.lit(self.gender).cast(pl.String).alias("gender"),
+            ((pl.col("date") - self.date_of_first_ride).dt.total_days() // 7).alias(
+                "week_no"
+            ),
+        ).select(["athlete_id", "gender", "week_no", "activity_id", "date", "trimp"])
+
+        output_df = (
+            output_df.group_by(["athlete_id", "gender", "week_no"])
+            .agg(pl.sum("trimp").alias("total_weekly_trimp"))
+            .sort("week_no")
+        )
+
+        return output_df
